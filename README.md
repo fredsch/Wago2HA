@@ -210,8 +210,60 @@ git commit -m "Description du changement"
 git push
 ```
 
-### (Optionnel) Construire et publier l'image Docker
-Si vous voulez une image prête à l'emploi sur GitHub Container Registry, je peux vous fournir un workflow GitHub Actions (`.github/workflows/docker.yml`) qui build et publie l'image automatiquement à chaque push. Demandez-le-moi.
+---
+
+## Construire et publier l'image Docker
+
+Deux options : automatiquement via GitHub Actions (recommandé), ou manuellement depuis votre PC.
+
+### Option A — Automatique via GitHub Actions (recommandé)
+
+Le projet inclut `.github/workflows/docker.yml`. À chaque `git push` sur `main` (ou sur un tag `vX.Y.Z`), GitHub construit l'image **multi-architecture** (PC `amd64`, Raspberry Pi `arm64` et `arm/v7`) et la publie sur **GitHub Container Registry (ghcr.io)**. Aucun secret à créer : le `GITHUB_TOKEN` intégré suffit.
+
+Mise en route (une seule fois) :
+1. Poussez le projet sur GitHub (voir section précédente). Le workflow se déclenche tout seul.
+2. Onglet **Actions** du dépôt → vérifiez que le job « Build and publish Docker image » passe au vert.
+3. La première fois, le paquet est créé en **privé**. Pour le rendre public : page du dépôt → **Packages** (colonne de droite) → cliquez sur `wago2ha` → **Package settings** → **Change visibility** → *Public*. (Vous pouvez aussi le laisser privé ; il faudra alors `docker login ghcr.io` pour le tirer.)
+
+Votre image est alors disponible à :
+```
+ghcr.io/<votre-utilisateur>/wago2ha:latest
+```
+Pour l'utiliser, décommentez la ligne `image:` dans `docker-compose.yml` (et commentez `build: .`), puis :
+```bash
+docker compose pull
+docker compose up -d
+```
+
+> Note : les noms d'images sur GHCR doivent être en **minuscules**. Si votre nom d'utilisateur contient des majuscules, utilisez-le en minuscules dans `docker-compose.yml`.
+
+### Option B — Manuelle depuis Windows (PowerShell)
+
+Nécessite **Docker Desktop**. Pour publier sur GHCR, créez d'abord un *Personal Access Token* GitHub (classic) avec la portée `write:packages` (Settings → Developer settings → Personal access tokens).
+
+```powershell
+cd C:\Users\<vous>\Wago2HA
+
+# Connexion (collez le token quand le mot de passe est demande)
+docker login ghcr.io -u <votre-utilisateur>
+
+# Construction (architecture de votre PC uniquement)
+docker build -t ghcr.io/<votre-utilisateur>/wago2ha:latest .
+
+# Publication
+docker push ghcr.io/<votre-utilisateur>/wago2ha:latest
+```
+
+Pour une image **multi-architecture** en manuel (utile si HA tourne sur Raspberry Pi) :
+```powershell
+docker buildx create --use --name wago2ha-builder
+docker buildx build `
+  --platform linux/amd64,linux/arm64,linux/arm/v7 `
+  -t ghcr.io/<votre-utilisateur>/wago2ha:latest `
+  --push .
+```
+
+> Pour publier sur **Docker Hub** plutôt que GHCR : `docker login` (sans argument), puis remplacez `ghcr.io/<votre-utilisateur>` par `<votre-utilisateur-dockerhub>` dans les commandes ci-dessus.
 
 ---
 

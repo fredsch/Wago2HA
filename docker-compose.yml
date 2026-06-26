@@ -1,7 +1,9 @@
 services:
   wago2ha:
+    # Pour construire localement, decommentez "build: ." et commentez "image:".
     build: .
-    # image: ghcr.io/<votre-utilisateur>/wago2ha:latest   # une fois publiee
+    # Pour utiliser l'image publiee sur GHCR (remplacez par votre depot, en minuscules) :
+    # image: ghcr.io/<votre-utilisateur>/wago2ha:latest
     container_name: wago2ha
     restart: unless-stopped
     # network_mode: host est le plus simple : l'automate peut joindre le port UDP
