@@ -1,0 +1,131 @@
+# =========================================================================
+#  Wago2HA - exemple de configuration
+#  Copiez ce fichier en config/config.yaml et adaptez-le a votre installation.
+# =========================================================================
+
+plc:
+  host: 192.168.1.50          # adresse IP de l'automate Wago 750-881
+  modbus_port: 502
+  modbus_unit: 1
+  udp_listen_port: 4646       # port UDP ou l'automate envoie les changements d'entree
+  udp_plc_port: 4646          # port UDP de l'automate pour les commandes DALI
+  # Offsets Modbus (valeurs par defaut Calaos pour un 750-841/881) :
+  output_write_offset: 4096   # WAGO_841_START_ADDRESS
+  output_read_offset: 512     # 0x200
+
+mqtt:
+  host: 192.168.1.10          # broker MQTT (souvent l'add-on Mosquitto de HA)
+  port: 1883
+  username: wago2ha
+  password: change-me
+  base_topic: wago2ha
+  discovery_prefix: homeassistant
+
+# Lecture des valeurs analogiques (temperatures, etc.) : toutes les 120 s
+poll_interval_s: 120
+
+# Suspension du programme automate quand la passerelle tourne (optionnel).
+# Necessite que votre programme CODESYS Calaos surveille une bobine "remote".
+# Voir le README, section "Suspendre le programme de l'automate".
+suspend_plc_program: false
+# suspend_coil: 5000
+
+entities:
+
+  # ----- ENTREES (boutons) sur 750-1405 / 750-430 -----
+  # Interrupteur simple (etat on/off) -> binary_sensor
+  - kind: input_switch
+    id: bp_salon
+    name: Bouton salon
+    var: 0
+
+  # Bouton avec clic simple + appui long -> entite "event" (single / long)
+  - kind: input_button
+    id: bp_chambre
+    name: Bouton chambre
+    var: 1
+    mode: long
+
+  # Bouton avec simple / double / triple clic -> entite "event"
+  - kind: input_button
+    id: bp_entree
+    name: Bouton entree
+    var: 2
+    mode: triple
+
+  # ----- SORTIES (relais) sur 750-1504 / 750-430 -----
+  - kind: output
+    id: relais_pompe
+    name: Pompe
+    var: 0
+
+  - kind: output
+    id: lumiere_cuisine
+    name: Lumiere cuisine
+    var: 1
+    light: true               # apparait comme "light" plutot que "switch"
+
+  # ----- VOLETS (2 sorties up/down) -----
+  - kind: shutter
+    id: volet_salon
+    name: Volet salon
+    var_up: 10                # sortie montee
+    var_down: 11              # sortie descente
+    time_up: 22               # temps de montee complet en secondes
+    time_down: 20             # temps de descente complet en secondes
+    initial_position: 0       # 0 = ferme, 100 = ouvert
+
+  # ----- LUMIERES DALI sur 750-641 -----
+  # Variateur simple (allumage / extinction / gradation)
+  - kind: light_dali
+    id: dali_sejour
+    name: Eclairage sejour
+    line: 1
+    address: 3                # adresse DALI 1-64
+    group: 0                  # 1 si 'address' est une adresse de groupe
+    fade: 1                   # temps de fondu DALI 1-10
+
+  # Lumiere DALI RGB (3 ballasts)
+  - kind: light_dali_rgb
+    id: dali_ambiance
+    name: Ambiance RGB
+    rline: 1
+    raddress: 4
+    gline: 1
+    gaddress: 5
+    bline: 1
+    baddress: 6
+    fade: 1
+
+  # ----- CAPTEURS DALI (750-641) -----
+  # NB: voir le README, ces lectures dependent de votre programme CODESYS.
+  - kind: dali_presence
+    id: presence_couloir
+    name: Presence couloir
+    line: 1
+    address: 10
+
+  - kind: dali_lux
+    id: lux_couloir
+    name: Luminosite couloir
+    line: 1
+    address: 11
+
+  # ----- TEMPERATURE PT1000 sur 750-640 -----
+  - kind: temperature
+    id: temp_exterieure
+    name: Temperature exterieure
+    var: 0                    # registre du module 750-640
+    # correction lineaire optionnelle : valeur_finale = valeur * coeff_a + coeff_b
+    coeff_a: 1.0
+    coeff_b: 0.0
+
+  # ----- AUTRE VALEUR ANALOGIQUE generique -----
+  - kind: analog
+    id: tension_batterie
+    name: Tension batterie
+    var: 5
+    unit: V
+    device_class: voltage
+    coeff_a: 0.01
+    coeff_b: 0.0

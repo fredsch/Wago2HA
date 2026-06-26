@@ -1,0 +1,30 @@
+Wago2HA - passerelle Wago 750-881 (Calaos) vers Home Assistant
+Copyright (C) 2026  <votre nom>
+
+Ce programme est un logiciel libre : vous pouvez le redistribuer et/ou le
+modifier selon les termes de la GNU General Public License telle que publiee
+par la Free Software Foundation, soit la version 3 de la Licence, soit (a
+votre choix) toute version ulterieure.
+
+Ce programme est distribue dans l'espoir qu'il sera utile, mais SANS AUCUNE
+GARANTIE ; sans meme la garantie implicite de QUALITE MARCHANDE ou
+d'ADEQUATION A UN USAGE PARTICULIER. Voir la GNU General Public License pour
+plus de details.
+
+Vous devez avoir recu une copie de la GNU General Public License en meme temps
+que ce programme. Le texte complet est disponible a l'adresse :
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+-------------------------------------------------------------------------------
+NOTE SUR L'ORIGINE
+
+Ce projet reimplemente le protocole de communication entre le serveur Calaos et
+les automates Wago, en s'inspirant du code source de Calaos (calaos_base),
+egalement publie sous licence GPLv3 :
+  https://github.com/calaos/calaos_base
+
+Il n'est ni affilie ni endosse par le projet Calaos.
+
+Pour respecter la licence, conservez ce fichier et placez le texte complet de
+la GPLv3 dans un fichier nomme "COPYING" a la racine du depot (telechargeable
+depuis l'URL ci-dessus).

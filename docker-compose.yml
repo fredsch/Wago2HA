@@ -1,0 +1,25 @@
+services:
+  wago2ha:
+    build: .
+    # image: ghcr.io/<votre-utilisateur>/wago2ha:latest   # une fois publiee
+    container_name: wago2ha
+    restart: unless-stopped
+    # network_mode: host est le plus simple : l'automate peut joindre le port UDP
+    # et la passerelle peut repondre au broadcast CALAOS_DISCOVER.
+    network_mode: host
+    environment:
+      LOG_LEVEL: INFO
+      CONFIG: /config/config.yaml
+    volumes:
+      - ./config:/config:ro
+
+  # Broker MQTT (a omettre si vous en avez deja un, ex. l'add-on Mosquitto de HA)
+  # mosquitto:
+  #   image: eclipse-mosquitto:2
+  #   container_name: mosquitto
+  #   restart: unless-stopped
+  #   ports:
+  #     - "1883:1883"
+  #   volumes:
+  #     - ./mosquitto/config:/mosquitto/config
+  #     - ./mosquitto/data:/mosquitto/data
