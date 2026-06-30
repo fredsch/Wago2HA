@@ -42,6 +42,9 @@ class Bridge:
             listen_port=cfg.plc.udp_listen_port,
             plc_port=cfg.plc.udp_plc_port,
             listen_addr=cfg.plc.udp_listen_addr,
+            gateway_ip=cfg.plc.gateway_ip,
+            heartbeat=cfg.plc.heartbeat,
+            heartbeat_interval=cfg.plc.heartbeat_interval_s,
         )
         self.mqtt = MqttHA(cfg.mqtt)
 
@@ -60,11 +63,19 @@ class Bridge:
         for e in self.cfg.entities:
             self._setup_entity(e)
         await self.udp.start()
+        # La suspension de la logique automate est desormais assuree par le
+        # heartbeat UDP (demarre dans udp.start()) : aucune bobine a ecrire.
 
-        if self.cfg.suspend_plc_program and self.cfg.suspend_coil is not None:
-            ok = await self.modbus.write_output_bit(self.cfg.suspend_coil, True)
-            log.info("Suspension du programme automate via coil %s : %s",
-                     self.cfg.suspend_coil, "ok" if ok else "echec")
+        # Restauration optionnelle de la position des volets depuis l'automate
+        # (pour les entites ayant un 'plc_volet_index'). Survit a un redemarrage.
+        for e in self.cfg.entities:
+            if e.kind == "shutter" and "plc_volet_index" in e.params:
+                pos = await self.udp.volet_get_position(int(e.params["plc_volet_index"]))
+                if pos is not None and 0 <= pos <= 100:
+                    self._shutter_pos[e.id] = float(pos)
+                    await self.mqtt.publish(f"{self.mqtt.base(e.id)}/position",
+                                            str(pos), retain=True)
+                    log.info("Position volet %s restauree depuis l'automate : %d%%", e.id, pos)
 
     def _setup_entity(self, e: Entity) -> None:
         handler = getattr(self, f"_setup_{e.kind}", None)
@@ -242,6 +253,9 @@ class Bridge:
             await self.mqtt.publish(f"{self.mqtt.base(e.id)}/position", str(pos), retain=True)
             state = "open" if pos >= 99 else "closed" if pos <= 1 else "stopped"
             await self.mqtt.publish(self.mqtt.state_topic(e.id), state)
+            # Persistance optionnelle de la position dans l'automate.
+            if "plc_volet_index" in e.params:
+                self.udp.volet_set_position(int(e.params["plc_volet_index"]), pos)
 
     # -------------------------------------------------------------- DALI
     def _setup_light_dali(self, e: Entity) -> None:
@@ -317,39 +331,13 @@ class Bridge:
         e.params["_cmd"] = cmd
 
     def _setup_dali_presence(self, e: Entity) -> None:
-        self.mqtt.register_discovery("binary_sensor", e.id, {
-            "name": e.name,
-            "device_class": "occupancy",
-            "state_topic": self.mqtt.state_topic(e.id),
-            "payload_on": "ON", "payload_off": "OFF",
-        })
-        e.params["_poll"] = lambda: self._poll_dali_sensor(e, "presence")
+        # Capteurs DALI (presence/luminosite) non geres : ce firmware Calaos
+        # n'expose pas la lecture des multicapteurs DALI via WAGO_DALI_GET
+        # (qui ne renvoie que le statut/niveau d'un ballast). Volontairement ignore.
+        log.warning("Type 'dali_presence' ignore (capteurs DALI non supportes) : %s", e.id)
 
     def _setup_dali_lux(self, e: Entity) -> None:
-        self.mqtt.register_discovery("sensor", e.id, {
-            "name": e.name,
-            "device_class": "illuminance",
-            "unit_of_measurement": "lx",
-            "state_topic": self.mqtt.state_topic(e.id),
-        })
-        e.params["_poll"] = lambda: self._poll_dali_sensor(e, "lux")
-
-    async def _poll_dali_sensor(self, e: Entity, kind: str) -> None:
-        # NOTE: la lecture de capteurs DALI (presence/luminosite) via 750-641
-        # n'est pas exposee telle quelle par Calaos. Adapter selon la reponse
-        # reelle de WAGO_DALI_GET de votre programme CODESYS.
-        line = int(e.params.get("line", 1))
-        address = int(e.params["address"])
-        res = await self.udp.dali_get(line, address)
-        if res is None:
-            return
-        tokens = res.split()
-        if kind == "presence":
-            val = "ON" if (len(tokens) > 1 and tokens[1] != "0") else "OFF"
-            await self.mqtt.publish(self.mqtt.state_topic(e.id), val)
-        else:
-            if len(tokens) > 1:
-                await self.mqtt.publish(self.mqtt.state_topic(e.id), tokens[1])
+        log.warning("Type 'dali_lux' ignore (capteurs DALI non supportes) : %s", e.id)
 
     # ----------------------------------------------------- ANALOGIQUES
     def _setup_temperature(self, e: Entity) -> None:

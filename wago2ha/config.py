@@ -20,6 +20,14 @@ class PlcConfig:
     udp_listen_addr: str = "0.0.0.0"
     output_write_offset: int = 4096
     output_read_offset: int = 0x200
+    # IP que l'automate doit cibler pour pousser les entrees et recevoir le
+    # heartbeat. Laisser vide => detection automatique vers `host`.
+    gateway_ip: str | None = None
+    # Heartbeat : maintient l'automate en "mode distant" (HEARTBEAT=TRUE), ce qui
+    # suspend sa logique locale et lui fait piloter ses sorties depuis le reseau.
+    # A laisser actif : c'est le mecanisme natif de suspension (aucune modif CODESYS).
+    heartbeat: bool = True
+    heartbeat_interval_s: float = 10.0
 
 
 @dataclass
@@ -46,8 +54,6 @@ class Config:
     mqtt: MqttConfig
     entities: list[Entity]
     poll_interval_s: int = 120  # lecture des analogiques toutes les 2 min
-    suspend_plc_program: bool = False
-    suspend_coil: int | None = None  # coil ecrit a True pour suspendre la logique automate
 
 
 def load_config(path: str) -> Config:
@@ -70,8 +76,15 @@ def load_config(path: str) -> Config:
         mqtt=mqtt,
         entities=entities,
         poll_interval_s=int(raw.get("poll_interval_s", 120)),
-        suspend_plc_program=bool(raw.get("suspend_plc_program", False)),
-        suspend_coil=raw.get("suspend_coil"),
     )
+
+    # Cles depreciees : la suspension passe desormais par le heartbeat UDP natif.
+    if "suspend_plc_program" in raw or "suspend_coil" in raw:
+        log.warning(
+            "Cles 'suspend_plc_program'/'suspend_coil' depreciees et ignorees : "
+            "la suspension du programme automate est assuree par le heartbeat UDP "
+            "(plc.heartbeat). Vous pouvez les retirer de votre config."
+        )
+
     log.info("Config chargee : %d equipements", len(entities))
     return cfg

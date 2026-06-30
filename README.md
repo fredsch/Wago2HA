@@ -61,18 +61,23 @@ Deux canaux vers l'automate :
 
 ### UDP (protocole Calaos, port 4646 par défaut)
 
-**Entrant** (automate → passerelle), à chaque changement d'état d'entrée :
-```
-WAGO INT <numéro_entrée> <état>      # entrée standard
-WAGO KNX <numéro_entrée> <état>      # entrée KNX
-```
-Découverte : l'automate émet `CALAOS_DISCOVER`, la passerelle répond `CALAOS_IP <ip>`.
+Le protocole complet et vérifié (extrait du programme automate `wago_881.pro`) est documenté dans **[`docs/WAGO_PROTOCOL.md`](docs/WAGO_PROTOCOL.md)**. Résumé :
 
-**Sortant** (passerelle → automate), pilotage DALI via 750-641 :
+**Entrant** (automate → passerelle), à chaque changement d'état d'une entrée TOR :
 ```
-WAGO_DALI_SET <ligne> <groupe> <adresse> <valeur 0-100> <fade 1-10>
-WAGO_DALI_GET <ligne> <adresse>
+WAGO INT <numéro_entrée> <0|1>
 ```
+Seules les entrées **numériques** sont poussées en UDP ; les valeurs analogiques se lisent en Modbus.
+
+**Sortant** (passerelle → automate) :
+```
+WAGO_HEARTBEAT                                          # suspend la logique automate
+WAGO_SET_SERVER_IP a.b.c.d                              # route les événements d'entrées
+WAGO_SET_OUTPUT <idx> <0|1>                             # forçage de sortie (repli)
+WAGO_DALI_SET <ligne> <groupe> <adresse> <0-100> <fade> # gradation DALI
+WAGO_INFO_VOLET_GET <idx> / WAGO_INFO_VOLET_SET <idx> <pos>  # position volet
+```
+La passerelle annonce son IP à l'automate au démarrage (`WAGO_SET_SERVER_IP`), il n'y a pas de phase de découverte à gérer côté automate.
 
 ### Détection des gestes
 
@@ -98,8 +103,6 @@ Deux sorties TOR (montée/descente). La passerelle pilote le moteur pendant la d
 | Volet (avec position) | 750-1504 / 430 | `cover` |
 | Luminaire DALI gradable | 750-641 | `light` (luminosité) |
 | Luminaire DALI RGB | 750-641 | `light` (RGB + luminosité) |
-| Capteur de présence DALI | 750-641 | `binary_sensor` (occupancy) |
-| Capteur de luminosité DALI | 750-641 | `sensor` (illuminance) |
 | Température PT1000 | 750-640 | `sensor` (température) |
 | Valeur analogique générique | 750-640 / ... | `sensor` |
 
@@ -148,22 +151,29 @@ Après démarrage, les entités apparaissent automatiquement dans Home Assistant
 
 ## Suspendre le programme de l'automate
 
-Vous souhaitez que, lorsque la passerelle tourne, la **logique** du programme automate soit suspendue (pour que Home Assistant devienne le seul cerveau, sans que l'automate ne déclenche ses propres scénarios).
+Lorsque la passerelle tourne, on veut que la **logique** du programme automate soit suspendue, pour que Home Assistant devienne le seul cerveau sans que l'automate ne déclenche ses propres scénarios (télérupteurs, volets…).
 
-Important : la couche d'E/S Modbus/UDP de l'automate doit **rester active** — sinon la passerelle ne peut plus lire/écrire. Il ne s'agit donc pas d'arrêter la tâche CODESYS, mais de neutraliser la partie « logique » de votre programme.
+Bonne nouvelle : **c'est natif dans le programme CODESYS Calaos, aucune modification n'est nécessaire.**
 
-Deux approches possibles, à choisir selon votre programme :
+Le programme automate maintient un `HEARTBEAT_TIMER` de 30 s. À chaque trame UDP `WAGO_HEARTBEAT` reçue, il le rearme et passe `HEARTBEAT = TRUE`. Dans cet état :
 
-1. **Bobine « mode distant » (recommandé)** — ajoutez dans votre programme CODESYS une variable booléenne (ex. `bRemoteMode`) mappée sur une bobine Modbus. Quand elle vaut `True`, votre programme saute l'exécution de ses règles internes et se contente de relayer les E/S. Renseignez alors dans la config :
-   ```yaml
-   suspend_plc_program: true
-   suspend_coil: 5000   # adresse de la bobine bRemoteMode
-   ```
-   Wago2HA mettra cette bobine à `True` au démarrage.
+- il **n'exécute plus** sa logique locale (`ManageOutput`) ;
+- il pilote ses sorties physiques **uniquement** depuis l'image réseau `netOutStandard` (écrite par Modbus).
 
-2. **Arrêt de la tâche via CODESYS** — techniquement possible avec le protocole CODESYS, mais cela coupe aussi les E/S : non recommandé ici.
+Wago2HA envoie ce heartbeat automatiquement (toutes les 10 s par défaut). Il suffit donc que le service tourne. C'est piloté par la config :
 
-Comme je ne connais pas le détail de votre programme CODESYS, dites-moi quelle approche vous voulez (ou envoyez-moi la structure de votre programme) et j'adapte le code en conséquence. Par défaut, cette fonction est désactivée.
+```yaml
+plc:
+  heartbeat: true            # maintient l'automate en mode distant (logique suspendue)
+  heartbeat_interval_s: 10   # < 30 s impératif
+```
+
+Conséquences importantes :
+
+- Si Wago2HA s'arrête, l'automate **repasse en mode autonome après 30 s** et reprend sa propre logique : la maison continue de fonctionner (repli gracieux). Vous pouvez régler ce comportement de repli via les commandes `WAGO_SET_OUTTYPE`/`WAGO_SET_OUTADDR` (voir `docs/WAGO_PROTOCOL.md`).
+- Les écritures de sorties (Modbus) ne sont prises en compte par l'automate **que** tant que le heartbeat est maintenu. C'est pourquoi `heartbeat` doit rester activé en fonctionnement normal.
+
+> L'ancienne approche par « bobine `bRemoteMode` » (clés `suspend_plc_program`/`suspend_coil`) est **abandonnée** : elle est inutile puisque le heartbeat fait le travail nativement. Ces clés sont ignorées si elles subsistent dans une ancienne config.
 
 ---
 
@@ -272,7 +282,7 @@ docker buildx build `
 Ce code implémente fidèlement le protocole reconstitué depuis Calaos, mais il **doit être validé sur votre matériel réel**. Points à vérifier en particulier :
 
 - **Offsets Modbus** (`output_write_offset` / `output_read_offset`) : confirmés pour la famille 750-841/881 d'après le source Calaos, mais la cartographie exacte dépend de votre programme CODESYS. Vérifiez qu'écrire une sortie l'actionne bien physiquement.
-- **Capteurs DALI (présence / luminosité)** : Calaos n'expose pas explicitement la lecture de capteurs DALI via le 750-641 dans le code consulté. La lecture proposée s'appuie sur `WAGO_DALI_GET` et devra probablement être adaptée au format réel renvoyé par votre programme.
+- **Capteurs DALI (présence / luminosité)** : **non pris en charge.** Le firmware Calaos n'expose pas la lecture des multicapteurs DALI — la commande `WAGO_DALI_GET` ne renvoie que le statut/niveau d'un *ballast*, pas l'occupation ni le lux. Les types `dali_presence`/`dali_lux` sont ignorés s'ils figurent dans la config.
 - **Port UDP** : 4646 par défaut (port Calaos historique). Ajustez `udp_listen_port` / `udp_plc_port` selon votre configuration.
 - **Format de l'état booléen UDP** : la passerelle accepte `true/false` et `1/0`.
 

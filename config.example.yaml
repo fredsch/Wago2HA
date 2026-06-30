@@ -13,6 +13,17 @@ plc:
   output_write_offset: 4096   # WAGO_841_START_ADDRESS
   output_read_offset: 512     # 0x200
 
+  # IP que l'automate doit cibler pour pousser les entrees et recevoir le
+  # heartbeat. Vide => detection automatique de l'IP locale vers `host`.
+  # gateway_ip: 192.168.1.50
+
+  # Heartbeat : maintient l'automate en "mode distant" (HEARTBEAT=TRUE), ce qui
+  # SUSPEND sa logique locale (telerupteurs/volets) et lui fait piloter ses
+  # sorties depuis le reseau. C'est le mecanisme natif Calaos : AUCUNE
+  # modification du programme CODESYS n'est necessaire. A laisser actif.
+  heartbeat: true
+  heartbeat_interval_s: 10     # l'automate retombe en autonome apres 30 s sans heartbeat
+
 mqtt:
   host: 192.168.1.10          # broker MQTT (souvent l'add-on Mosquitto de HA)
   port: 1883
@@ -24,11 +35,7 @@ mqtt:
 # Lecture des valeurs analogiques (temperatures, etc.) : toutes les 120 s
 poll_interval_s: 120
 
-# Suspension du programme automate quand la passerelle tourne (optionnel).
-# Necessite que votre programme CODESYS Calaos surveille une bobine "remote".
-# Voir le README, section "Suspendre le programme de l'automate".
-suspend_plc_program: false
-# suspend_coil: 5000
+# (La suspension du programme automate est geree par plc.heartbeat ci-dessus.)
 
 entities:
 
@@ -74,6 +81,8 @@ entities:
     time_up: 22               # temps de montee complet en secondes
     time_down: 20             # temps de descente complet en secondes
     initial_position: 0       # 0 = ferme, 100 = ouvert
+    # plc_volet_index: 0      # optionnel : memorise la position dans l'automate
+    #                         #   (survit a un redemarrage de la passerelle)
 
   # ----- LUMIERES DALI sur 750-641 -----
   # Variateur simple (allumage / extinction / gradation)
@@ -96,20 +105,6 @@ entities:
     bline: 1
     baddress: 6
     fade: 1
-
-  # ----- CAPTEURS DALI (750-641) -----
-  # NB: voir le README, ces lectures dependent de votre programme CODESYS.
-  - kind: dali_presence
-    id: presence_couloir
-    name: Presence couloir
-    line: 1
-    address: 10
-
-  - kind: dali_lux
-    id: lux_couloir
-    name: Luminosite couloir
-    line: 1
-    address: 11
 
   # ----- TEMPERATURE PT1000 sur 750-640 -----
   - kind: temperature
