@@ -23,6 +23,7 @@ plc:
   # modification du programme CODESYS n'est necessaire. A laisser actif.
   heartbeat: true
   heartbeat_interval_s: 10     # l'automate retombe en autonome apres 30 s sans heartbeat
+  status_interval_s: 30        # sonde Online/Offline + version de l'automate (0 = desactive)
 
 mqtt:
   host: 192.168.1.10          # broker MQTT (souvent l'add-on Mosquitto de HA)

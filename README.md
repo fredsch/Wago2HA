@@ -105,8 +105,19 @@ Deux sorties TOR (montée/descente). La passerelle pilote le moteur pendant la d
 | Luminaire DALI RGB | 750-641 | `light` (RGB + luminosité) |
 | Température PT1000 | 750-640 | `sensor` (température) |
 | Valeur analogique générique | 750-640 / ... | `sensor` |
+| Programme Calaos (version) | — | `sensor` (diagnostic) |
+| État de l'automate Wago | — | `binary_sensor` connectivity (diagnostic) |
 
 Les valeurs analogiques sont lues périodiquement (120 s par défaut, configurable). Les états des boutons arrivent en temps réel par UDP.
+
+### Statut et version de l'automate
+
+Deux entités de diagnostic sont créées automatiquement (rattachées à l'appareil « Wago2HA ») :
+
+- **Programme Calaos** : la version du programme installé sur l'automate (ex. `2.3`), avec le type de module en attribut (ex. `750-841`). Récupérée via `WAGO_GET_VERSION`.
+- **Automate Wago** : `connectivity` **Online/Offline**, distinct de la disponibilité de la passerelle. La passerelle sonde l'automate (ping UDP `WAGO_GET_VERSION`) toutes les `status_interval_s` secondes : une réponse ⇒ Online, un timeout ⇒ Offline.
+
+À noter la différence entre les deux niveaux de disponibilité : si la **passerelle** s'arrête, toutes les entités passent *unavailable* dans HA (via le testament MQTT). Si la passerelle tourne mais que l'**automate** est injoignable, l'entité « Automate Wago » passe à *Offline* tandis que la passerelle reste disponible.
 
 ---
 
@@ -285,6 +296,20 @@ Ce code implémente fidèlement le protocole reconstitué depuis Calaos, mais il
 - **Capteurs DALI (présence / luminosité)** : **non pris en charge.** Le firmware Calaos n'expose pas la lecture des multicapteurs DALI — la commande `WAGO_DALI_GET` ne renvoie que le statut/niveau d'un *ballast*, pas l'occupation ni le lux. Les types `dali_presence`/`dali_lux` sont ignorés s'ils figurent dans la config.
 - **Port UDP** : 4646 par défaut (port Calaos historique). Ajustez `udp_listen_port` / `udp_plc_port` selon votre configuration.
 - **Format de l'état booléen UDP** : la passerelle accepte `true/false` et `1/0`.
+
+### Les entrées (interrupteurs) ne réagissent pas ?
+
+C'est le symptôme d'un **routage d'IP serveur** non appliqué. L'automate ne pousse ses événements
+`WAGO INT …` que vers l'IP mémorisée dans `Config.SERVER_IP` (mémoire RETAIN). Wago2HA la
+(ré)annonce à chaque heartbeat via `WAGO_SET_SERVER_IP`. À vérifier si ça ne marche toujours pas :
+
+- La passerelle doit tourner en **`network_mode: host`** (docker-compose). En mode *bridge*, l'IP
+  auto-détectée serait l'IP interne du conteneur (172.x), injoignable par l'automate. Sinon, fixez
+  explicitement `plc.gateway_ip` avec l'IP LAN de la machine hôte.
+- Le port **4646/UDP** doit être ouvert en entrée sur l'hôte.
+- Activez `LOG_LEVEL=DEBUG` : la ligne « 1ere entree recue de l'automate » confirme le routage.
+- Vérifiez que le `var` de chaque entrée correspond bien au numéro poussé par l'automate
+  (`WAGO INT <var> …`), qui est l'index relatif à la première entrée numérique.
 
 N'hésitez pas à activer les logs détaillés (`LOG_LEVEL=DEBUG`) pour observer les trames pendant la mise au point.
 ```bash

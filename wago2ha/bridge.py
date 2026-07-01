@@ -54,12 +54,19 @@ class Bridge:
         self._gesture_detectors: dict[str, object] = {}
         self._shutter_tasks: dict[str, asyncio.Task] = {}
         self._shutter_pos: dict[str, float] = {}
+        self._wago_online: bool | None = None      # dernier etat publie (None = jamais)
+        self._wago_version: str | None = None       # derniere version publiee
+
+    # entites "systeme" (diagnostic) exposees automatiquement
+    VERSION_ID = "wago_version"
+    STATUS_ID = "wago_connectivity"
 
     # ---------------------------------------------------------------- setup
     async def setup(self) -> None:
         await self.modbus.connect()
         self.udp.on_input(self._on_udp_input)
         self.mqtt.on_command(self._on_mqtt_command)
+        self._setup_system_entities()
         for e in self.cfg.entities:
             self._setup_entity(e)
         await self.udp.start()
@@ -76,6 +83,50 @@ class Bridge:
                     await self.mqtt.publish(f"{self.mqtt.base(e.id)}/position",
                                             str(pos), retain=True)
                     log.info("Position volet %s restauree depuis l'automate : %d%%", e.id, pos)
+
+    # ------------------------------------------------ entites systeme / statut
+    def _setup_system_entities(self) -> None:
+        # Version du programme Calaos installe sur l'automate (capteur diagnostic)
+        self.mqtt.register_discovery("sensor", self.VERSION_ID, {
+            "name": "Programme Calaos",
+            "state_topic": self.mqtt.state_topic(self.VERSION_ID),
+            "json_attributes_topic": f"{self.mqtt.base(self.VERSION_ID)}/attributes",
+            "entity_category": "diagnostic",
+            "icon": "mdi:chip",
+        })
+        # Etat de l'automate lui-meme : Online/Offline (independant de la passerelle)
+        self.mqtt.register_discovery("binary_sensor", self.STATUS_ID, {
+            "name": "Automate Wago",
+            "device_class": "connectivity",
+            "state_topic": self.mqtt.state_topic(self.STATUS_ID),
+            "payload_on": "ON", "payload_off": "OFF",
+            "entity_category": "diagnostic",
+        })
+
+    async def _publish_wago_status(self, online: bool, version: tuple[str, str] | None) -> None:
+        if online != self._wago_online:
+            self._wago_online = online
+            await self.mqtt.publish(self.mqtt.state_topic(self.STATUS_ID),
+                                    "ON" if online else "OFF")
+            log.info("Automate Wago : %s", "Online" if online else "Offline")
+        if version is not None:
+            ver, typ = version
+            if ver != self._wago_version:
+                self._wago_version = ver
+                await self.mqtt.publish(self.mqtt.state_topic(self.VERSION_ID), ver)
+                await self.mqtt.publish(
+                    f"{self.mqtt.base(self.VERSION_ID)}/attributes",
+                    json.dumps({"calaos_version": ver, "module_type": typ}))
+                log.info("Programme Calaos sur l'automate : v%s (%s)", ver, typ)
+
+    async def wago_status_loop(self) -> None:
+        interval = self.cfg.plc.status_interval_s
+        if interval <= 0:
+            return
+        while True:
+            version = await self.udp.get_version()
+            await self._publish_wago_status(online=version is not None, version=version)
+            await asyncio.sleep(interval)
 
     def _setup_entity(self, e: Entity) -> None:
         handler = getattr(self, f"_setup_{e.kind}", None)
@@ -427,5 +478,9 @@ class Bridge:
                 if asyncio.iscoroutine(res):
                     await res
         poll_task = asyncio.ensure_future(self.poll_loop())
+        # statut Online/Offline + version de l'automate (verification immediate)
+        version = await self.udp.get_version()
+        await self._publish_wago_status(online=version is not None, version=version)
+        status_task = asyncio.ensure_future(self.wago_status_loop())
         log.info("Wago2HA demarre.")
-        await asyncio.gather(mqtt_task, poll_task)
+        await asyncio.gather(mqtt_task, poll_task, status_task)

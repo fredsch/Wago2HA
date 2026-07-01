@@ -28,6 +28,9 @@ class PlcConfig:
     # A laisser actif : c'est le mecanisme natif de suspension (aucune modif CODESYS).
     heartbeat: bool = True
     heartbeat_interval_s: float = 10.0
+    # Sonde de disponibilite de l'automate (ping UDP WAGO_GET_VERSION) et
+    # rafraichissement de la version. 0 => desactive.
+    status_interval_s: float = 30.0
 
 
 @dataclass

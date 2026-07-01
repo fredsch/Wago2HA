@@ -34,6 +34,13 @@ Effet dans `PLC_PRG` :
 **Pour Wago2HA :** envoyer `WAGO_HEARTBEAT` toutes les ~10 s suffit pour que HA devienne le seul
 cerveau, sans toucher au programme CODESYS. Sans heartbeat, les écritures de sorties sont ignorées.
 
+**Important (routage des entrées) :** le serveur Calaos officiel renvoie `WAGO_SET_SERVER_IP <ip>`
+**à chaque battement de heartbeat** (`WagoMap::WagoHeartBeatTick`), pas seulement au démarrage.
+`Config.SERVER_IP` étant en mémoire RETAIN côté automate, un unique envoi peut être perdu tant
+que le serveur UDP de l'automate n'est pas encore ouvert : l'automate continuerait alors de
+pousser les `WAGO INT …` vers une ancienne IP, et **aucune entrée n'arriverait**. Wago2HA reproduit
+donc ce comportement : `WAGO_SET_SERVER_IP` est ré-émis à chaque heartbeat.
+
 ## 3. Commandes entrantes (serveur → automate), UDP/4646, ASCII
 
 Les paramètres sont séparés par des espaces. Le parsing automate utilise `Strncmp` (préfixe) +

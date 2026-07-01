@@ -98,9 +98,11 @@ class WagoUdp:
 
         self.transport: asyncio.DatagramTransport | None = None
         self._input_cb: InputCallback | None = None
-        self._pending: dict[str, asyncio.Future] = {}
+        # requetes en attente d'une reponse, correlees par prefixe attendu
+        self._pending: list[tuple[str, asyncio.Future]] = []
         self._loop: asyncio.AbstractEventLoop | None = None
         self._hb_task: asyncio.Task | None = None
+        self._first_input_seen: bool = False
 
     def on_input(self, cb: InputCallback) -> None:
         self._input_cb = cb
@@ -115,17 +117,18 @@ class WagoUdp:
         )
         log.info("Serveur UDP Calaos a l'ecoute sur %s:%s", self.listen_addr, self.listen_port)
 
-        # Diriger les evenements d'entrees vers cette passerelle.
-        gw = self.gateway_ip or _local_ip_for(self.plc_host)
-        self.set_server_ip(gw)
-        log.info("IP serveur annoncee a l'automate : %s", gw)
-
-        # Heartbeat => suspend la logique automate et active le pilotage reseau.
+        # Heartbeat => (re)annonce l'IP serveur ET suspend la logique automate.
+        # WAGO_SET_SERVER_IP est renvoye a CHAQUE battement, comme le serveur
+        # Calaos (WagoMap::WagoHeartBeatTick). Config.SERVER_IP est en RETAIN
+        # cote automate : un unique envoi au demarrage peut etre perdu tant que le
+        # serveur UDP de l'automate n'est pas encore ouvert, et les entrees
+        # (WAGO INT ...) partiraient alors vers une ancienne IP -> aucune reaction.
         if self.heartbeat_enabled:
             self._hb_task = self._loop.create_task(self._heartbeat_loop())
-            log.info("Heartbeat actif (%.0fs) : l'automate suspend sa logique locale.",
+            log.info("Heartbeat actif (%.0fs) : (re)annonce IP serveur + suspension logique automate.",
                      self.heartbeat_interval)
         else:
+            self.set_server_ip(self.gateway_ip or _local_ip_for(self.plc_host))
             log.warning("Heartbeat DESACTIVE : l'automate gardera sa logique autonome.")
 
     async def stop(self) -> None:
@@ -139,8 +142,11 @@ class WagoUdp:
             self.transport.close()
 
     async def _heartbeat_loop(self) -> None:
+        # Envoi immediat au premier tour, puis toutes les heartbeat_interval s.
         while True:
-            self._send_raw("WAGO_HEARTBEAT")
+            gw = self.gateway_ip or _local_ip_for(self.plc_host)
+            self.set_server_ip(gw)          # route les entrees vers cette passerelle
+            self._send_raw("WAGO_HEARTBEAT")  # suspend la logique locale de l'automate
             await asyncio.sleep(self.heartbeat_interval)
 
     # ----------------------------------------------------------- reception
@@ -157,6 +163,10 @@ class WagoUdp:
                 except ValueError:
                     return
                 val = _parse_bool(parts[3])
+                if not self._first_input_seen:
+                    self._first_input_seen = True
+                    log.info("1ere entree recue de l'automate (%s) : %s %s = %s "
+                             "-> routage des entrees OK.", addr[0], kind, inp, val)
                 log.debug("Entree recue: %s %s = %s", kind, inp, val)
                 if self._input_cb and self._loop:
                     res = self._input_cb(inp, val, kind)
@@ -164,12 +174,14 @@ class WagoUdp:
                         asyncio.ensure_future(res)
             return
 
-        # Reponses correlables (DALI GET, etc.) : on resout la 1ere en attente
-        if self._pending:
-            key, fut = next(iter(self._pending.items()))
-            self._pending.pop(key, None)
-            if not fut.done():
-                fut.set_result(msg)
+        # Reponses correlables : on resout la 1ere requete dont le prefixe attendu
+        # correspond a la trame recue (evite les collisions version/volet/dali).
+        for i, (prefix, fut) in enumerate(self._pending):
+            if msg.startswith(prefix):
+                self._pending.pop(i)
+                if not fut.done():
+                    fut.set_result(msg)
+                return
 
     # ----------------------------------------------------------- emission
     def _send_raw(self, text: str, addr: tuple[str, int] | None = None) -> None:
@@ -190,6 +202,21 @@ class WagoUdp:
         """Force une sortie TOR par UDP (repli ; en heartbeat, Modbus prime)."""
         self._send_raw(f"WAGO_SET_OUTPUT {idx} {1 if state else 0}")
 
+    # ----- requete/reponse correlee par prefixe
+    async def _request(self, command: str, reply_prefix: str,
+                       timeout: float = 2.0) -> str | None:
+        assert self._loop is not None
+        fut: asyncio.Future = self._loop.create_future()
+        entry = (reply_prefix, fut)
+        self._pending.append(entry)
+        self._send_raw(command)
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            if entry in self._pending:
+                self._pending.remove(entry)
+            return None
+
     # ----- DALI (actionneurs)
     def dali_set(self, line: int, group: int, address: int, value: int, fade: int = 1) -> None:
         value = max(0, min(100, value))   # niveau en pourcent
@@ -197,34 +224,34 @@ class WagoUdp:
         self._send_raw(f"WAGO_DALI_SET {line} {group} {address} {value} {fade}")
 
     async def dali_get(self, line: int, address: int, timeout: float = 2.0) -> str | None:
-        assert self._loop is not None
-        fut: asyncio.Future = self._loop.create_future()
-        key = f"{line}:{address}:{id(fut)}"
-        self._pending[key] = fut
         # format automate : WAGO_DALI_GET <line> <shortAddr> <address> <p4> <p5>
-        self._send_raw(f"WAGO_DALI_GET {line} {address} {address} 0 0")
-        try:
-            return await asyncio.wait_for(fut, timeout)
-        except asyncio.TimeoutError:
-            self._pending.pop(key, None)
+        return await self._request(
+            f"WAGO_DALI_GET {line} {address} {address} 0 0", "WAGO_DALI_GET", timeout)
+
+    # ----- version du programme Calaos sur l'automate
+    async def get_version(self, timeout: float = 2.0) -> tuple[str, str] | None:
+        """Retourne (version_calaos, type_module), ex. ('2.3', '750-841')."""
+        msg = await self._request("WAGO_GET_VERSION", "WAGO_GET_VERSION", timeout)
+        if not msg:
             return None
+        # reponse : "WAGO_GET_VERSION <H>.<L> 750-841"
+        parts = msg.split()
+        if len(parts) >= 3:
+            return parts[1], parts[2]
+        return None
 
     # ----- volets : position memorisee dans l'automate (stockage, pas de recalcul)
     def volet_set_position(self, idx: int, position: int) -> None:
         self._send_raw(f"WAGO_INFO_VOLET_SET {idx} {int(position)}")
 
     async def volet_get_position(self, idx: int, timeout: float = 2.0) -> int | None:
-        assert self._loop is not None
-        fut: asyncio.Future = self._loop.create_future()
-        self._pending[f"volet:{idx}:{id(fut)}"] = fut
-        self._send_raw(f"WAGO_INFO_VOLET_GET {idx}")
-        try:
-            msg = await asyncio.wait_for(fut, timeout)
-        except asyncio.TimeoutError:
+        msg = await self._request(
+            f"WAGO_INFO_VOLET_GET {idx}", "WAGO_INFO_VOLET", timeout)
+        if not msg:
             return None
         # reponse : "WAGO_INFO_VOLET <idx> <position>"
         parts = msg.split()
-        if len(parts) >= 3 and parts[0] == "WAGO_INFO_VOLET":
+        if len(parts) >= 3:
             try:
                 return int(parts[2])
             except ValueError:
